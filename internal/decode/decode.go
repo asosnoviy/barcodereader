@@ -152,6 +152,14 @@ func (s *Service) Decode(ctx context.Context, pdf []byte, opts Options) (*Result
 	if pagesTotal == 0 {
 		pagesTotal = s.documentPages(ctx, pdf, opts)
 	}
+	if pagesScanned == 0 {
+		// Рендер не запускался, но стадия A всё равно обошла запрошенные
+		// страницы: отчитываемся честно, без рендера.
+		pagesScanned = min(opts.MaxPages, pagesTotal)
+		if len(opts.Pages) > 0 {
+			pagesScanned = min(len(opts.Pages), pagesTotal)
+		}
+	}
 
 	unique, total, collapsed := aggregate(codes)
 
