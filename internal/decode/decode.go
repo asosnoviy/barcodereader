@@ -38,7 +38,11 @@ type Options struct {
 
 // EmbeddedStage — стадия A.
 type EmbeddedStage interface {
-	Extract(ctx context.Context, pdf []byte, maxPages int) ([]pdfembedded.Image, error)
+	// Extract достаёт встроенные изображения выбранных страниц (1-based);
+	// пустой selection означает «первые maxPages».
+	Extract(ctx context.Context, pdf []byte, selection []int, maxPages int) ([]pdfembedded.Image, error)
+	// PageCount возвращает число страниц документа.
+	PageCount(ctx context.Context, pdf []byte) (int, error)
 }
 
 // Renderer — стадия B.
@@ -146,7 +150,7 @@ func (s *Service) Decode(ctx context.Context, pdf []byte, opts Options) (*Result
 		codes = append(codes, rendered.codes...)
 	}
 	if pagesTotal == 0 {
-		pagesTotal = countSelectedPages(opts)
+		pagesTotal = s.documentPages(ctx, pdf, opts)
 	}
 
 	unique, total, collapsed := aggregate(codes)
@@ -180,12 +184,9 @@ func (s *Service) Decode(ctx context.Context, pdf []byte, opts Options) (*Result
 }
 
 func (s *Service) applyDefaults(opts Options) Options {
-	if !opts.IncludeBarcodes {
-		opts.IncludeBarcodes = s.cfg.IncludeBarcodes
-	}
-	if !opts.ReturnAllQR {
-		opts.ReturnAllQR = s.cfg.ReturnAllQR
-	}
+	// Булевы опции не дефолтизируются здесь намеренно: явный false от
+	// клиента должен означать «не искать», а не «взять значение из конфига».
+	// Конфигурацию в дефолты подставляет вызывающий код (HTTP-слой).
 	if opts.MaxPages <= 0 {
 		opts.MaxPages = s.cfg.MaxPages
 	}
@@ -198,11 +199,16 @@ func (s *Service) applyDefaults(opts Options) Options {
 	return opts
 }
 
-// countSelectedPages возвращает размер выборки страниц, когда рендер не
-// выполнялся и счётчик из рендерера недоступен.
-func countSelectedPages(opts Options) int {
+// documentPages узнаёт число страниц без рендера: рендер запускать только
+// ради счётчика слишком дорого.
+func (s *Service) documentPages(ctx context.Context, pdf []byte, opts Options) int {
 	if len(opts.Pages) > 0 {
 		return len(opts.Pages)
+	}
+	if s.embedded != nil {
+		if total, err := s.embedded.PageCount(ctx, pdf); err == nil && total > 0 {
+			return total
+		}
 	}
 	return opts.MaxPages
 }
@@ -234,7 +240,7 @@ func (s *Service) shouldRender(codes []Code, opts Options) bool {
 
 // runEmbedded декодирует коды во встроенных изображениях.
 func (s *Service) runEmbedded(ctx context.Context, pdf []byte, opts Options) ([]Code, error) {
-	images, err := s.embedded.Extract(ctx, pdf, opts.MaxPages)
+	images, err := s.embedded.Extract(ctx, pdf, opts.Pages, opts.MaxPages)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +281,9 @@ func (s *Service) runRender(ctx context.Context, pdf []byte, opts Options) (rend
 
 	doc, err := s.renderer.Open(ctx, pdf)
 	if err != nil {
-		return out, classifyRenderError(err)
+		// Документ не открылся: почти всегда это битый или защищённый файл,
+		// а не сбой сервиса.
+		return out, classifyOpenError(err)
 	}
 	defer doc.Close()
 
@@ -392,18 +400,42 @@ func convertPoints(points []image.Point, convert func(float64) float64) []image.
 	return out
 }
 
-// classifyRenderError переводит ошибки PDFium в контракт API.
+// classifyOpenError переводит ошибку открытия документа: PDFium не смог
+// разобрать файл, значит для клиента это 422, а не 500.
+func classifyOpenError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return apierrors.Timeout()
+	}
+	if isCapacityError(err) {
+		return apierrors.NoCapacity(err)
+	}
+	if isEncryptedError(err) {
+		return apierrors.PDFEncrypted(err)
+	}
+	return apierrors.PDFUnreadable(err)
+}
+
+// classifyRenderError переводит ошибки рендера страницы.
 func classifyRenderError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return apierrors.Timeout()
 	}
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "password"), strings.Contains(msg, "encrypted"):
-		return apierrors.PDFEncrypted(err)
-	case strings.Contains(msg, "corrupt"), strings.Contains(msg, "invalid"), strings.Contains(msg, "damaged"):
-		return apierrors.PDFUnreadable(err)
-	default:
-		return apierrors.Internal(err)
+	if isCapacityError(err) {
+		return apierrors.NoCapacity(err)
 	}
+	if isEncryptedError(err) {
+		return apierrors.PDFEncrypted(err)
+	}
+	return apierrors.Internal(err)
+}
+
+func isEncryptedError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "password") || strings.Contains(msg, "encrypted")
+}
+
+func isCapacityError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no free instance") ||
+		strings.Contains(msg, "instance") && strings.Contains(msg, "pool")
 }

@@ -23,10 +23,28 @@ type stubEmbedded struct {
 	calls  int
 }
 
-func (s *stubEmbedded) Extract(context.Context, []byte, int) ([]pdfembedded.Image, error) {
+func (s *stubEmbedded) Extract(_ context.Context, _ []byte, selection []int, _ int) ([]pdfembedded.Image, error) {
 	s.calls++
-	return s.images, s.err
+	if s.err != nil {
+		return nil, s.err
+	}
+	if len(selection) == 0 {
+		return s.images, nil
+	}
+	// Стадия A обязана уважать выборку страниц.
+	var out []pdfembedded.Image
+	for _, img := range s.images {
+		for _, page := range selection {
+			if img.PageNr == page {
+				out = append(out, img)
+				break
+			}
+		}
+	}
+	return out, nil
 }
+
+func (s *stubEmbedded) PageCount(context.Context, []byte) (int, error) { return 3, nil }
 
 type stubRenderer struct {
 	doc *stubDocument

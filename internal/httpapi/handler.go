@@ -103,7 +103,7 @@ func (h *Handler) handleDecode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts, err := buildOptions(optionsOf(jsonBody), decode.Options{})
+	opts, err := buildOptions(optionsOf(jsonBody), h.defaultOptions())
 	if err != nil {
 		h.writeError(w, requestID, err)
 		return
@@ -136,6 +136,17 @@ func optionsOf(body *decodeRequest) *requestOption {
 		return nil
 	}
 	return body.Options
+}
+
+// defaultOptions раскладывает конфигурацию в параметры разбора: так клиентские
+// опции перекрывают настройки, а не заменяются ими.
+func (h *Handler) defaultOptions() decode.Options {
+	return decode.Options{
+		IncludeBarcodes: h.cfg.IncludeBarcodes,
+		ReturnAllQR:     h.cfg.ReturnAllQR,
+		MaxPages:        h.cfg.MaxPages,
+		DPI:             h.cfg.RenderDPI,
+	}
 }
 
 // readBody читает тело с ограничением размера.

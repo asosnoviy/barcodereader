@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	github.com/boombuler/barcode v1.1.0
+	github.com/go-pdf/fpdf v0.9.0
 	github.com/klippa-app/go-pdfium v1.21.3
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/pdfcpu/pdfcpu v0.16.0

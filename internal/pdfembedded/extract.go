@@ -11,6 +11,8 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -32,45 +34,108 @@ type Image struct {
 	FileType string
 }
 
-// minImagePixels отсекает крошечные картинки: иконки, разделители и прочие
-// элементы оформления, в которых штрихкода быть не может.
-const minImagePixels = 32 * 32
+// minImageSide отсекает крошечные картинки: иконки, разделители и прочие
+// элементы оформления, в которых штрихкода быть не может. Это минимальная
+// сторона, а не площадь.
+const minImageSide = 32
 
 // Extractor реализует стадию A как метод, чтобы пакет можно было подставить
 // в decode.Service без обёрток в main.
 type Extractor struct{}
 
-// Extract извлекает встроенные изображения первых maxPages страниц.
-func (Extractor) Extract(ctx context.Context, pdf []byte, maxPages int) ([]Image, error) {
-	return Extract(ctx, pdf, maxPages)
+// Extract извлекает встроенные изображения указанных страниц.
+func (Extractor) Extract(ctx context.Context, pdf []byte, selection []int, maxPages int) ([]Image, error) {
+	return Extract(ctx, pdf, selection, maxPages)
 }
 
-// Extract достаёт встроенные изображения первых maxPages страниц документа.
+// PageCount возвращает число страниц документа. Используется для meta.pages_total,
+// когда стадия рендера не запускалась.
+func (Extractor) PageCount(ctx context.Context, pdf []byte) (int, error) {
+	return PageCount(ctx, pdf)
+}
+
+// PageCount возвращает число страниц документа.
+func PageCount(ctx context.Context, pdf []byte) (int, error) {
+	count, err := api.PageCount(ctx, bytes.NewReader(pdf), model.NewDefaultConfiguration())
+	if err != nil {
+		return 0, classify(err)
+	}
+	return count, nil
+}
+
+// Extract достаёт встроенные изображения документа.
 //
+// selection — номера страниц (1-based); пустой список означает «первые maxPages».
 // Ошибки делятся на две группы: нарушения формата (битый или защищённый PDF)
 // возвращаются как apierrors, а всё остальное — предупреждением, после
 // которого вызывающий код переходит к стадии рендера.
-func Extract(ctx context.Context, pdf []byte, maxPages int) ([]Image, error) {
+func Extract(ctx context.Context, pdf []byte, selection []int, maxPages int) (images []Image, err error) {
+	// pdfcpu местами паникует на неподдерживаемых потоках (например, на
+	// некоторых PNG). Для сервиса это не повод падать: перехватываем и
+	// спускаемся к стадии рендера.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			images = nil
+			err = fmt.Errorf("%w: pdfcpu паника: %v", ErrStageFailed, recovered)
+		}
+	}()
+
 	if maxPages < 1 {
 		maxPages = 1
 	}
 
-	selection := make([]string, 0, maxPages)
-	for i := 1; i <= maxPages; i++ {
-		selection = append(selection, fmt.Sprintf("%d", i))
+	pageNumbers := make([]string, 0, maxPages)
+	if len(selection) == 0 {
+		for i := 1; i <= maxPages; i++ {
+			pageNumbers = append(pageNumbers, strconv.Itoa(i))
+		}
+	} else {
+		for _, page := range selection {
+			if page < 1 {
+				continue
+			}
+			if len(pageNumbers) >= maxPages {
+				break
+			}
+			pageNumbers = append(pageNumbers, strconv.Itoa(page))
+		}
+	}
+	if len(pageNumbers) == 0 {
+		return nil, nil
 	}
 
 	conf := model.NewDefaultConfiguration()
 	// JBIG2 и прочие неподдерживаемые потоки не должны ронять стадию целиком.
 	conf.UnsupportedResourcePolicy = model.UnsupportedResourceSkip
 
-	pages, err := api.ExtractImagesRaw(ctx, bytes.NewReader(pdf), selection, conf)
-	if err != nil {
-		return nil, classify(err)
+	pages, extractErr := api.ExtractImagesRaw(ctx, bytes.NewReader(pdf), pageNumbers, conf)
+
+	// При политике Skip pdfcpu возвращает UnsupportedResourceError вместе с
+	// успешно извлечёнными картинками. Отбрасывать результат в этом случае
+	// нельзя — картинки вполне рабочие.
+	if extractErr != nil && len(pages) == 0 {
+		return nil, classify(extractErr)
+	}
+	if extractErr != nil {
+		slog.Debug("часть встроенных изображений не извлечена", "err", extractErr)
 	}
 
+	out, err := decodeAll(ctx, pages, pageNumbers)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// decodeAll превращает потоки pdfcpu в изображения. pageNumbers — список
+// номеров страниц, соответствующий позициям в pages; он нужен, если pdfcpu
+// не проставил PageNr.
+func decodeAll(ctx context.Context, pages []map[int]model.Image, pageNumbers []string) ([]Image, error) {
 	var out []Image
 	for position, pageImages := range pages {
+		if err := ctx.Err(); err != nil {
+			return nil, apierrors.Timeout()
+		}
 		for _, raw := range pageImages {
 			if raw.Reader == nil {
 				continue
@@ -82,13 +147,15 @@ func Extract(ctx context.Context, pdf []byte, maxPages int) ([]Image, error) {
 			}
 
 			bounds := img.Bounds()
-			if bounds.Dx() < minImagePixels || bounds.Dy() < minImagePixels {
+			if bounds.Dx() < minImageSide || bounds.Dy() < minImageSide {
 				continue
 			}
 
 			pageNr := raw.PageNr
+			if pageNr <= 0 && position < len(pageNumbers) {
+				pageNr, _ = strconv.Atoi(pageNumbers[position])
+			}
 			if pageNr <= 0 {
-				// Индекс элемента соответствует позиции в выборке страниц.
 				pageNr = position + 1
 			}
 

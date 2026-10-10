@@ -98,6 +98,8 @@ func padBase64(s string, encoding *base64.Encoding) string {
 }
 
 // buildOptions переводит пользовательские опции в параметры декодирования.
+// Дефолты берутся из конфигурации здесь, а не в decode: явный false от клиента
+// («не искать штрихкоды») обязан переживать переход по слоям.
 func buildOptions(opts *requestOption, defaults decode.Options) (decode.Options, error) {
 	if opts == nil {
 		return defaults, nil
