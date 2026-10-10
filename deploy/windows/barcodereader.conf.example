@@ -1,0 +1,46 @@
+# Пример файла конфигурации службы Windows.
+#
+# Скопируйте в C:\ProgramData\Barcodereader\barcodereader.conf и правьте под
+# своё окружение. Путь можно задать явно переменной CONFIG_FILE.
+#
+# Формат тот же, что у переменных окружения: ИМЯ=ЗНАЧЕНИЕ. Комментарии — с #.
+# ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ВАЖНЕЕ ЭТОГО ФАЙЛА: если переменная задана, побеждает
+# именно она. Это позволяет менять настройки перезапуском службы из консоли,
+# не правя файл.
+
+# Адрес прослушивания. Служба по умолчанию слушает все интерфейсы — ограничьте
+# конкретным адресом, если служба доступна из сети.
+ADDR = :8080
+
+# Лимиты запросов.
+MAX_PDF_BYTES = 20971520
+MAX_PAGES = 10
+
+# Рендер страниц. Второй проход с повышенным DPI помогает на мелких кодах,
+# но тратит время: если всё читается на первом, отключите RETRY_HIGHER_DPI.
+RENDER_DPI = 200
+RENDER_DPI_MAX = 400
+RETRY_HIGHER_DPI = true
+
+# Что искать.
+INCLUDE_BARCODES = true
+RETURN_ALL_QR = true
+ENABLE_EMBEDDED_STAGE = true
+
+# Поиск по тёмным областям: единственный способ найти Data Matrix, сдвинутый
+# от центра страницы. Подробности в разделе о поиске кодов не по центру.
+REGION_SEARCH = true
+REGION_MARGIN = 8
+
+# Ограничения параллелизма. PDFIUM_WORKERS — размер пула PDFium,
+# MAX_CONCURRENT — сколько документов разбирать одновременно.
+PDFIUM_WORKERS = 4
+MAX_CONCURRENT = 4
+QUEUE_WAIT = 2s
+
+# Журнал. Пустое значение означает stdout: в консольном режиме это удобно,
+# а под службой журнал подставляется автоматически в
+# %PROGRAMDATA%\Barcodereader\logs\barcodereader.log
+LOG_LEVEL = info
+LOG_FILE = C:\ProgramData\Barcodereader\logs\barcodereader.log
+LOG_PAYLOADS = false

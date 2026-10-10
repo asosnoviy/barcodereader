@@ -34,6 +34,7 @@ type Config struct {
 	QueueWait           time.Duration
 	LogLevel            string
 	LogPayloads         bool
+	LogFile             string
 }
 
 // Default возвращает конфигурацию по умолчанию.
@@ -71,8 +72,9 @@ func Default() Config {
 	}
 }
 
-// Load читает конфигурацию из окружения процесса.
-func Load() (Config, error) { return LoadFrom(os.Getenv) }
+// Load читает конфигурацию: сначала файл конфигурации (если он есть),
+// поверх — переменные окружения. Переменные имеют приоритет.
+func Load() (Config, error) { return LoadFrom(environmentWithFile(os.Getenv)) }
 
 // LoadFrom читает конфигурацию из переданной функции доступа к переменным
 // окружения. Ошибки валидации собираются все сразу, а не по одной.
@@ -164,6 +166,11 @@ func LoadFrom(getenv func(string) string) (Config, error) {
 	positiveInt("ONED_MAX_WIDTH", &cfg.OneDMaxWidth)
 	positiveInt("PDFIUM_WORKERS", &cfg.PdfiumWorkers)
 	positiveInt("MAX_CONCURRENT", &cfg.MaxConcurrent)
+
+	// Журнал в файл: пустой LOG_FILE означает stdout, как и раньше.
+	if v := strings.TrimSpace(getenv("LOG_FILE")); v != "" {
+		cfg.LogFile = v
+	}
 
 	// Поле тишины вокруг найденной области. 0 включает автоматический выбор:
 	// поле считается четвертью стороны символа.
