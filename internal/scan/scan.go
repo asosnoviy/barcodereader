@@ -205,7 +205,12 @@ func scanOneD(ctx context.Context, img image.Image, opts Options) []Code {
 			return nil
 		}
 		if codes := tryOneDReaders(small, hintSet); len(codes) > 0 {
-			return codes
+			// Попытка могла вернуть мусор: вертикальную линию рамки ZXing
+			// принимает за штрихкод. Отфильтрованное пусто означает, что
+			// надо продолжать лестницу, а не останавливаться.
+			if kept := filterOneD(codes); len(kept) > 0 {
+				return kept
+			}
 		}
 	}
 
@@ -219,9 +224,58 @@ func scanOneD(ctx context.Context, img image.Image, opts Options) []Code {
 	if inverted == nil {
 		return nil
 	}
-	return tryOneDReaders(inverted, map[gozxing.DecodeHintType]any{
+	return filterOneD(tryOneDReaders(inverted, map[gozxing.DecodeHintType]any{
 		gozxing.DecodeHintType_TRY_HARDER: true,
-	})
+	}))
+}
+
+// minBarcodeWidth — минимальная ширина линейного кода в пикселях.
+//
+// Нужен, чтобы отсечь ложные срабатывания. ZXing при TRY_HARDER
+// соглашается на вертикальные линии таблиц и рамок, выдавая их за
+// UPC-E: на реальной накладной он «находил» код 04009795 шириной
+// ноль пикселей на границе ячейки. Настоящий линейный код даже самый
+// узкий занимает сотни пикселей — на замерах фикстур от 509 до 1118.
+const minBarcodeWidth = 24
+
+// filterOneD убирает результаты, которые не могут быть штрихкодом.
+//
+// Проверяется ширина: у линейного кода ZXing возвращает две точки —
+// начала и конца строки — и у настоящего кода расстояние между ними
+// большое. У вертикальной линии эти точки совпадают по X, то есть
+// ширина нулевая.
+func filterOneD(codes []Code) []Code {
+	if len(codes) == 0 {
+		return codes
+	}
+
+	kept := make([]Code, 0, len(codes))
+	for _, c := range codes {
+		if c.Kind != KindBarcode || codeWidth(c.Points) >= minBarcodeWidth {
+			kept = append(kept, c)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+// codeWidth — расстояние между крайними точками по горизонтали.
+func codeWidth(points []image.Point) int {
+	if len(points) < 2 {
+		return 0
+	}
+	minX, maxX := points[0].X, points[0].X
+	for _, p := range points[1:] {
+		if p.X < minX {
+			minX = p.X
+		}
+		if p.X > maxX {
+			maxX = p.X
+		}
+	}
+	return maxX - minX
 }
 
 // convertResults превращает результаты ZXing в коды нашего формата.

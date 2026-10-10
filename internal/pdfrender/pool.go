@@ -151,10 +151,19 @@ func (d *Document) RenderPage(ctx context.Context, index, dpi int) (*Page, error
 		return nil, fmt.Errorf("рендер страницы %d вернул пустое изображение", index+1)
 	}
 
+	// PointToPixelRatio от PDFium — это ПИКСЕЛИ на пункт (например,
+	// 5.56 при 400 dpi), тогда как Page.PointsPerPixel должен быть
+	// пунктами на пиксель. Без обращения коэффициент брался наоборот,
+	// и координаты в ответе API выходили в разы больше размеров страницы.
+	ratio := rendered.Result.PointToPixelRatio
+	if ratio <= 0 {
+		ratio = float64(dpi) / 72
+	}
+
 	return &Page{
 		Image:          img,
 		DPI:            dpi,
-		PointsPerPixel: rendered.Result.PointToPixelRatio,
+		PointsPerPixel: 1 / ratio,
 	}, nil
 }
 
