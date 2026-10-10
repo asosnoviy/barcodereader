@@ -36,6 +36,15 @@ type Image struct {
 // элементы оформления, в которых штрихкода быть не может.
 const minImagePixels = 32 * 32
 
+// Extractor реализует стадию A как метод, чтобы пакет можно было подставить
+// в decode.Service без обёрток в main.
+type Extractor struct{}
+
+// Extract извлекает встроенные изображения первых maxPages страниц.
+func (Extractor) Extract(ctx context.Context, pdf []byte, maxPages int) ([]Image, error) {
+	return Extract(ctx, pdf, maxPages)
+}
+
 // Extract достаёт встроенные изображения первых maxPages страниц документа.
 //
 // Ошибки делятся на две группы: нарушения формата (битый или защищённый PDF)

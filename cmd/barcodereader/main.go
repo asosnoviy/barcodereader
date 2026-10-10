@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,10 @@ import (
 	"time"
 
 	"barcodereader/internal/config"
+	"barcodereader/internal/decode"
+	"barcodereader/internal/httpapi"
+	"barcodereader/internal/pdfembedded"
+	"barcodereader/internal/pdfrender"
 )
 
 func main() {
@@ -32,13 +35,22 @@ func run() error {
 	logger := newLogger(cfg)
 	slog.SetDefault(logger)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthHandler)
-	mux.HandleFunc("GET /readyz", readyHandler)
+	// Пул PDFium инициализируется один раз: Wazero компилирует wasm-модуль
+	// при старте, поэтому лишние инстансы замедляют подъём сервиса.
+	renderer, err := pdfrender.NewRenderer(cfg.PdfiumWorkers)
+	if err != nil {
+		return err
+	}
+	defer renderer.Close()
+
+	decoder := decode.New(cfg, pdfiumRenderer{renderer}, pdfembedded.Extractor{}, logger)
+	handler := httpapi.NewHandler(cfg, decoder, logger)
 
 	srv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           mux,
+		Addr:    cfg.Addr,
+		Handler: handler.Routes(),
+		// WriteTimeout должен быть заметно больше таймаута декодирования,
+		// иначе соединение оборвётся раньше, чем сформируется ответ.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      cfg.RequestTimeout + 10*time.Second,
@@ -50,7 +62,12 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("сервис запущен", "addr", cfg.Addr, "workers", cfg.PdfiumWorkers)
+		logger.Info("сервис запущен",
+			"addr", cfg.Addr,
+			"workers", cfg.PdfiumWorkers,
+			"embedded_stage", cfg.EnableEmbeddedStage,
+			"render_dpi", cfg.RenderDPI,
+		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -63,12 +80,25 @@ func run() error {
 		logger.Info("получен сигнал остановки")
 	}
 
+	// Новые запросы отклоняются сразу, текущие успевают завершиться.
+	handler.StartDraining()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
+	logger.Info("сервис остановлен")
 	return nil
+}
+
+// pdfiumRenderer адаптирует pdfrender.Renderer к интерфейсам decode.
+type pdfiumRenderer struct {
+	renderer *pdfrender.Renderer
+}
+
+func (p pdfiumRenderer) Open(ctx context.Context, pdf []byte) (decode.Document, error) {
+	return p.renderer.Open(ctx, pdf)
 }
 
 func newLogger(cfg config.Config) *slog.Logger {
@@ -84,20 +114,4 @@ func newLogger(cfg config.Config) *slog.Logger {
 		level = slog.LevelInfo
 	}
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
-}
-
-func healthHandler(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func readyHandler(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		slog.Error("не удалось записать ответ", "err", err)
-	}
 }
