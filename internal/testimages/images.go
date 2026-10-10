@@ -14,6 +14,7 @@ import (
 	"math"
 
 	"github.com/makiuchi-d/gozxing"
+	"github.com/makiuchi-d/gozxing/datamatrix"
 	"github.com/makiuchi-d/gozxing/oned"
 	"github.com/skip2/go-qrcode"
 
@@ -92,6 +93,49 @@ func EAN13(content string, scale, height int) (image.Image, error) {
 		}
 	}
 	return dst, nil
+}
+
+// DataMatrix рисует код Data Matrix штатным writer'ом ZXing: его выход
+// заведомо читается тем же декодером, поэтому фикстура не зависит от
+// особенностей чужого рендеринга.
+func DataMatrix(content string, scale, quiet int) (image.Image, error) {
+	matrix, err := datamatrix.NewDataMatrixWriter().Encode(content, gozxing.BarcodeFormat_DATA_MATRIX, 0, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	return fromBitMatrix(matrix, scale, quiet), nil
+}
+
+// fromBitMatrix превращает битовую матрицу ZXing в изображение с тихой зоной.
+// Работает и с однострочными матрицами линейных кодов, и с квадратными
+// матрицами Data Matrix.
+func fromBitMatrix(matrix *gozxing.BitMatrix, scale, quiet int) image.Image {
+	if scale < 1 {
+		scale = 1
+	}
+	if quiet < 0 {
+		quiet = 0
+	}
+
+	modulesX := matrix.GetWidth()
+	modulesY := matrix.GetHeight()
+	width := (modulesX + 2*quiet) * scale
+	height := (modulesY + 2*quiet) * scale
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	for y := range height {
+		for x := range width {
+			col := x/scale - quiet
+			row := y/scale - quiet
+			black := col >= 0 && col < modulesX && row >= 0 && row < modulesY && matrix.Get(col, row)
+			if black {
+				dst.Set(x, y, color.Black)
+			} else {
+				dst.Set(x, y, color.White)
+			}
+		}
+	}
+	return dst
 }
 
 func maxInt(a, b int) int {

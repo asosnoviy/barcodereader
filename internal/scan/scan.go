@@ -7,8 +7,9 @@ import (
 	"image"
 
 	"github.com/makiuchi-d/gozxing"
-	zxingqr "github.com/makiuchi-d/gozxing/qrcode"
+	"github.com/makiuchi-d/gozxing/datamatrix"
 	zxingmultiqr "github.com/makiuchi-d/gozxing/multi/qrcode"
+	zxingqr "github.com/makiuchi-d/gozxing/qrcode"
 )
 
 // Kind различает QR-коды и линейные штрихкоды в едином массиве codes[].
@@ -17,6 +18,9 @@ type Kind string
 const (
 	KindQR      Kind = "qr"
 	KindBarcode Kind = "barcode"
+	// KindMatrix — двумерный код Data Matrix. На этикетках маркетплейсов
+	// и в логистике он встречается часто, но в QR он не превращается.
+	KindMatrix Kind = "matrix"
 )
 
 // Code — найденный код. Точки лежат в пикселях исходного изображения, в
@@ -112,10 +116,44 @@ func Scan(ctx context.Context, img image.Image, opts Options) []Code {
 
 	found := make([]Code, 0, 2)
 	found = append(found, scanQR(ctx, img, opts)...)
+	found = append(found, scanDataMatrix(ctx, img, opts)...)
 	if opts.IncludeBarcodes && ctx.Err() == nil {
 		found = append(found, scanOneD(ctx, img, opts)...)
 	}
 	return found
+}
+
+// scanDataMatrix ищет двумерные коды Data Matrix.
+//
+// Ридер ZXing на странице целиком часто не находит символ: его детектор
+// начинает осмотр от центра кадра (см. regions.go). Поэтому поиск идёт двумя
+// попытками — обычной и с TRY_HARDER, — а для символов, стоящих не по центру,
+// оркестратор дополнительно проходит по тёмным областям (ScanRegions).
+func scanDataMatrix(ctx context.Context, img image.Image, opts Options) []Code {
+	scaled := Downscale(img, opts.MaxImageDim)
+
+	attempts := []map[gozxing.DecodeHintType]any{
+		{gozxing.DecodeHintType_POSSIBLE_FORMATS: []gozxing.BarcodeFormat{gozxing.BarcodeFormat_DATA_MATRIX}},
+		{
+			gozxing.DecodeHintType_POSSIBLE_FORMATS: []gozxing.BarcodeFormat{gozxing.BarcodeFormat_DATA_MATRIX},
+			gozxing.DecodeHintType_TRY_HARDER:        true,
+		},
+	}
+
+	for _, hints := range attempts {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		bitmap, err := hybridBitmap(scaled)
+		if err != nil {
+			return nil
+		}
+		res, err := datamatrix.NewDataMatrixReader().Decode(bitmap, hints)
+		if err == nil && res != nil {
+			return convertResults([]*gozxing.Result{res}, KindMatrix)
+		}
+	}
+	return nil
 }
 
 // scanQR перебирает попытки, пока не найдёт QR-код(ы).
@@ -170,7 +208,20 @@ func scanOneD(ctx context.Context, img image.Image, opts Options) []Code {
 			return codes
 		}
 	}
-	return nil
+
+	// Штрихкод может быть напечатан белым по чёрному — так его делают, например,
+	// на этикетках маркетплейсов. Обычные попытки выше такой код не видят,
+	// поэтому последней идёт попытка на инвертированном изображении.
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
+	inverted := DownscaleWidth(Invert(img), opts.OneDMaxWidth)
+	if inverted == nil {
+		return nil
+	}
+	return tryOneDReaders(inverted, map[gozxing.DecodeHintType]any{
+		gozxing.DecodeHintType_TRY_HARDER: true,
+	})
 }
 
 // convertResults превращает результаты ZXing в коды нашего формата.

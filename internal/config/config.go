@@ -24,6 +24,8 @@ type Config struct {
 	RetryHigherDPI      bool
 	MaxImageDim         int
 	OneDMaxWidth        int
+	RegionSearch        bool
+	RegionMargin        int
 	EnableEmbeddedStage bool
 	IncludeBarcodes     bool
 	ReturnAllQR         bool
@@ -56,6 +58,8 @@ func Default() Config {
 		RetryHigherDPI:      true,
 		MaxImageDim:         3000,
 		OneDMaxWidth:        1600,
+		RegionSearch:        true,
+		RegionMargin:        8,
 		EnableEmbeddedStage: true,
 		IncludeBarcodes:     true,
 		ReturnAllQR:         true,
@@ -161,6 +165,17 @@ func LoadFrom(getenv func(string) string) (Config, error) {
 	positiveInt("PDFIUM_WORKERS", &cfg.PdfiumWorkers)
 	positiveInt("MAX_CONCURRENT", &cfg.MaxConcurrent)
 
+	// Поле тишины вокруг найденной области. 0 включает автоматический выбор:
+	// поле считается четвертью стороны символа.
+	if v := strings.TrimSpace(getenv("REGION_MARGIN")); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed < 0 {
+			errs = append(errs, fmt.Sprintf("REGION_MARGIN: %q должно быть целым и >= 0", v))
+		} else {
+			cfg.RegionMargin = parsed
+		}
+	}
+
 	// DPI применяются только парой: если одна из настроек некорректна, обе
 	// остаются дефолтными, чтобы лестница рендера не оказалась перевёрнутой.
 	dpi, dpiMax := cfg.RenderDPI, cfg.RenderDPIMax
@@ -177,6 +192,7 @@ func LoadFrom(getenv func(string) string) (Config, error) {
 
 	boolean("RETRY_HIGHER_DPI", &cfg.RetryHigherDPI)
 	boolean("ENABLE_EMBEDDED_STAGE", &cfg.EnableEmbeddedStage)
+	boolean("REGION_SEARCH", &cfg.RegionSearch)
 	boolean("INCLUDE_BARCODES", &cfg.IncludeBarcodes)
 	boolean("RETURN_ALL_QR", &cfg.ReturnAllQR)
 	boolean("LOG_PAYLOADS", &cfg.LogPayloads)

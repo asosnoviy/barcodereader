@@ -374,6 +374,7 @@ func TestRespectsMaxPages(t *testing.T) {
 	cfg.EnableEmbeddedStage = false
 	// Без повторного прохода по DPI каждый page рендерится ровно один раз.
 	cfg.RetryHigherDPI = false
+	cfg.RegionSearch = false
 	doc := &stubDocument{pages: 10}
 	svc := New(cfg, &stubRenderer{doc: doc}, nil, quietLogger())
 
@@ -393,6 +394,7 @@ func TestDPILadderRetriesWhenNothingFound(t *testing.T) {
 	cfg := testConfig()
 	cfg.EnableEmbeddedStage = false
 	cfg.RetryHigherDPI = true
+	cfg.RegionSearch = false
 	cfg.RenderDPI, cfg.RenderDPIMax = 200, 400
 	doc := &stubDocument{pages: 1}
 	svc := New(cfg, &stubRenderer{doc: doc}, nil, quietLogger())
@@ -406,6 +408,98 @@ func TestDPILadderRetriesWhenNothingFound(t *testing.T) {
 	}
 	if doc.rendered != 2 {
 		t.Errorf("страниц отрендерено %d, ожидалось 2 (лестница DPI)", doc.rendered)
+	}
+}
+
+// Страница может быть отрисована несколько раз: лестница DPI, затем поиск по
+// областям. meta.pages_scanned обязан оставаться числом страниц, а не числом
+// рендеров, иначе в ответе появляется pages_scanned > pages_total.
+func TestPagesScannedCountsPagesNotRenders(t *testing.T) {
+	cfg := testConfig()
+	cfg.EnableEmbeddedStage = false
+	cfg.RetryHigherDPI = true
+	cfg.RegionSearch = true
+	cfg.RenderDPI, cfg.RenderDPIMax = 200, 400
+	// Единственная страница без кодов: её трижды отрендерят (200 dpi, 400 dpi,
+	// поиск по областям), но проскана была одна страница.
+	doc := &stubDocument{pages: 1}
+	svc := New(cfg, &stubRenderer{doc: doc}, nil, quietLogger())
+
+	opts := defaultOptions()
+	opts.IncludeBarcodes = false
+	opts.DPI = 200
+
+	if _, err := svc.Decode(t.Context(), []byte("%PDF-1.7"), opts); err == nil {
+		t.Fatal("ожидалась ошибка no_codes_found")
+	}
+	if doc.rendered != 3 {
+		t.Errorf("рендеров %d, ожидалось 3 (лестница DPI + поиск по областям)", doc.rendered)
+	}
+
+	// Проверяем сам счётчик через успешный ответ: код найден, но рендеров было
+	// больше, чем страниц.
+	found := &stubDocument{pages: 1, images: map[int]image.Image{0: testimages.QR("ЕСТЬ", 300)}}
+	svc = New(cfg, &stubRenderer{doc: found}, nil, quietLogger())
+
+	res, err := svc.Decode(t.Context(), []byte("%PDF-1.7"), opts)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if res.Meta.PagesScanned != 1 {
+		t.Errorf("pages_scanned = %d, ожидалась 1", res.Meta.PagesScanned)
+	}
+	if res.Meta.PagesScanned > res.Meta.PagesTotal {
+		t.Errorf("pages_scanned (%d) больше pages_total (%d)",
+			res.Meta.PagesScanned, res.Meta.PagesTotal)
+	}
+}
+
+func TestRegionSearchRunsOnlyAfterMiss(t *testing.T) {
+	cfg := testConfig()
+	cfg.EnableEmbeddedStage = false
+	cfg.RetryHigherDPI = false
+	cfg.RegionSearch = true
+	doc := &stubDocument{pages: 1, images: map[int]image.Image{0: testimages.QR("НАЙДЕНО", 300)}}
+	svc := New(cfg, &stubRenderer{doc: doc}, nil, quietLogger())
+
+	opts := defaultOptions()
+	opts.IncludeBarcodes = false
+
+	if _, err := svc.Decode(t.Context(), []byte("%PDF-1.7"), opts); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if doc.rendered != 1 {
+		t.Errorf("страниц отрендерено %d, ожидался 1: поиск по областям должен запускаться только после промаха", doc.rendered)
+	}
+
+	// Пустая страница: обычное сканирование не даёт ничего, значит
+	// добавляется ещё один рендер под поиск по областям.
+	empty := &stubDocument{pages: 1}
+	svc = New(cfg, &stubRenderer{doc: empty}, nil, quietLogger())
+	if _, err := svc.Decode(t.Context(), []byte("%PDF-1.7"), opts); err == nil {
+		t.Fatal("ожидалась ошибка no_codes_found")
+	}
+	if empty.rendered != 2 {
+		t.Errorf("страниц отрендерено %d, ожидалось 2 (обычный проход + поиск по областям)", empty.rendered)
+	}
+}
+
+func TestRegionSearchDisabledInConfig(t *testing.T) {
+	cfg := testConfig()
+	cfg.EnableEmbeddedStage = false
+	cfg.RetryHigherDPI = false
+	cfg.RegionSearch = false
+	empty := &stubDocument{pages: 1}
+	svc := New(cfg, &stubRenderer{doc: empty}, nil, quietLogger())
+
+	opts := defaultOptions()
+	opts.IncludeBarcodes = false
+
+	if _, err := svc.Decode(t.Context(), []byte("%PDF-1.7"), opts); err == nil {
+		t.Fatal("ожидалась ошибка no_codes_found")
+	}
+	if empty.rendered != 1 {
+		t.Errorf("страниц отрендерено %d, ожидался 1: поиск по областям отключён", empty.rendered)
 	}
 }
 

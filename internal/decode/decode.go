@@ -277,10 +277,23 @@ func (s *Service) runEmbedded(ctx context.Context, pdf []byte, opts Options) ([]
 
 // renderOutcome — результат стадии B.
 type renderOutcome struct {
-	codes         []Code
-	dpi           int
-	pagesTotal    int
-	pagesScanned  int
+	codes        []Code
+	dpi          int
+	pagesTotal   int
+	pagesScanned int
+	// scanned помечает страницы, которые действительно просматривались.
+	// Счётчик в pagesScanned нельзя увеличивать на каждом рендере: страница
+	// может быть отрисована дважды (лестница DPI, затем поиск по областям),
+	// а в meta.pages_scanned ожидается число страниц, а не число проходов.
+	scanned map[int]bool
+}
+
+func (o *renderOutcome) markScanned(page int) {
+	if o.scanned == nil {
+		o.scanned = make(map[int]bool)
+	}
+	o.scanned[page] = true
+	o.pagesScanned = len(o.scanned)
 }
 
 // runRender декодирует коды на отрендеренных страницах с лестницей DPI.
@@ -333,12 +346,48 @@ func (s *Service) runRender(ctx context.Context, pdf []byte, opts Options) (rend
 				})
 			}
 			out.dpi = pageDPI
-			out.pagesScanned++
+			out.markScanned(page)
 		}
 		if len(out.codes) > 0 {
 			break
 		}
 	}
+
+	// Проход по тёмным областям — последний довод для мелких двумерных
+	// символов, стоящих не по центру страницы (Data Matrix на этикетках).
+	// Запускается только когда обычное сканирование ничего не дало.
+	if len(out.codes) == 0 && s.cfg.RegionSearch {
+		for _, page := range pages {
+			if err := ctx.Err(); err != nil {
+				return out, apierrors.Timeout()
+			}
+			pageDPI := s.fitDPI(doc, page, out.dpi)
+			rendered, err := doc.RenderPage(ctx, page, pageDPI)
+			if err != nil {
+				return out, classifyRenderError(err)
+			}
+
+			convert := rendered.PixelsToPoints
+			for _, found := range scan.ScanRegions(ctx, rendered.Image, scanOpts, s.cfg.RegionMargin) {
+				points := convertPoints(found.Points, convert)
+				out.codes = append(out.codes, Code{
+					Value:  found.Value,
+					Kind:   string(found.Kind),
+					Format: found.Format,
+					Page:   page + 1,
+					Source: SourceRenderedPage,
+					BBox:   bbox(points, func(v float64) float64 { return v }),
+					Points: found.Points,
+				})
+			}
+			out.dpi = pageDPI
+			out.markScanned(page)
+			if len(out.codes) > 0 {
+				break
+			}
+		}
+	}
+
 	return out, nil
 }
 
