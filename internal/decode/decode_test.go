@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"image"
+	"image/draw"
 	"io"
 	"log/slog"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"barcodereader/internal/config"
 	"barcodereader/internal/pdfrender"
 	"barcodereader/internal/pdfembedded"
+	"barcodereader/internal/scan"
 	"barcodereader/internal/testimages"
 )
 
@@ -454,7 +456,9 @@ func TestPagesScannedCountsPagesNotRenders(t *testing.T) {
 	}
 }
 
-func TestRegionSearchRunsOnlyAfterMiss(t *testing.T) {
+// Страница с уже найденным QR не должна обходить��я поиском по областям:
+// двумерный код на ней уже есть, а лишний рендер ничего не добавит.
+func TestRegionSearchSkipsPagesWithMatrix(t *testing.T) {
 	cfg := testConfig()
 	cfg.EnableEmbeddedStage = false
 	cfg.RetryHigherDPI = false
@@ -469,7 +473,7 @@ func TestRegionSearchRunsOnlyAfterMiss(t *testing.T) {
 		t.Fatalf("Decode: %v", err)
 	}
 	if doc.rendered != 1 {
-		t.Errorf("страниц отрендерено %d, ожидался 1: поиск по областям должен запускаться только после промаха", doc.rendered)
+		t.Errorf("страниц отрендерено %d, ожидался 1: QR найден, повторный обход не нужен", doc.rendered)
 	}
 
 	// Пустая страница: обычное сканирование не даёт ничего, значит
@@ -481,6 +485,63 @@ func TestRegionSearchRunsOnlyAfterMiss(t *testing.T) {
 	}
 	if empty.rendered != 2 {
 		t.Errorf("страниц отрендерено %d, ожидалось 2 (обычный проход + поиск по областям)", empty.rendered)
+	}
+}
+
+// Регрессия: Data Matrix не должен теряться рядом с линейным штрихкодом.
+//
+// Детектор Data Matrix ищет символ от центра кадра, поэтому на этикетке он
+// часто не находится обычным проходом. Но там же лежит штрихкод, который
+// находится легко, и прежнее условие «искать по областям только если не
+// найдено вообще ничего» молча проглатывало двумерный код.
+func TestRegionSearchFindsMatrixNextToBarcode(t *testing.T) {
+	cfg := testConfig()
+	cfg.EnableEmbeddedStage = false
+	cfg.RetryHigherDPI = false
+	cfg.RegionSearch = true
+
+	// Страница: штрихкод внизу по центру (находится легко) и Data Matrix
+	// в углу (находится только поиском по областям).
+	matrix, err := testimages.DataMatrix("62822776321-1", 6, 4)
+	if err != nil {
+		t.Fatalf("генерация Data Matrix: %v", err)
+	}
+	barcode := testimages.Barcode("04009795", testimages.Code128, 500, 120)
+
+	page := image.NewRGBA(image.Rect(0, 0, 900, 600))
+	draw.Draw(page, page.Bounds(), image.White, image.Point{}, draw.Src)
+	pasteAt(page, matrix, 40, 40)
+	pasteAt(page, barcode, 200, 430)
+
+	doc := &stubDocument{pages: 1, images: map[int]image.Image{0: page}}
+	svc := New(cfg, &stubRenderer{doc: doc}, nil, quietLogger())
+
+	opts := defaultOptions()
+	res, err := svc.Decode(t.Context(), []byte("%PDF-1.7"), opts)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	values := make(map[string]string, len(res.Codes))
+	for _, c := range res.Codes {
+		values[c.Value] = c.Kind
+	}
+	if kind, ok := values["62822776321-1"]; !ok {
+		t.Errorf("Data Matrix не найден рядом со штрихкодом, получено: %+v", res.Codes)
+	} else if kind != string(scan.KindMatrix) {
+		t.Errorf("kind Data Matrix = %q, ожидался %q", kind, scan.KindMatrix)
+	}
+	if _, ok := values["04009795"]; !ok {
+		t.Errorf("штрихкод потерян, получено: %+v", res.Codes)
+	}
+}
+
+func pasteAt(dst *image.RGBA, src image.Image, offX, offY int) {
+	b := src.Bounds()
+	for y := range b.Dy() {
+		for x := range b.Dx() {
+			dst.Set(b.Min.X+x+offX, b.Min.Y+y+offY, src.At(b.Min.X+x, b.Min.Y+y))
+		}
 	}
 }
 

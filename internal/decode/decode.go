@@ -353,13 +353,22 @@ func (s *Service) runRender(ctx context.Context, pdf []byte, opts Options) (rend
 		}
 	}
 
-	// Проход по тёмным областям — последний довод для мелких двумерных
-	// символов, стоящих не по центру страницы (Data Matrix на этикетках).
-	// Запускается только когда обычное сканирование ничего не дало.
-	if len(out.codes) == 0 && s.cfg.RegionSearch {
+	// Поиск по тёмным областям обязателен, а не «после промаха».
+	//
+	// Детектор Data Matrix в ZXing ищет символ от центра кадра, поэтому
+	// код на этикетке часто не находится обычным проходом. Но на той же
+	// странице может лежать линейный штрихкод, который находится легко.
+	// Прежнее условие «запускать, только если не найдено вообще ничего»
+	// из-за этого молча теряло Data Matrix рядом со штрихкодом.
+	if s.cfg.RegionSearch {
 		for _, page := range pages {
 			if err := ctx.Err(); err != nil {
 				return out, apierrors.Timeout()
+			}
+			// Страницы, где двумерные коды уже найдены обычным проходом,
+			// повторно обходить незачем.
+			if pageHasMatrix(out.codes, page+1) {
+				continue
 			}
 			pageDPI := s.fitDPI(doc, page, out.dpi)
 			rendered, err := doc.RenderPage(ctx, page, pageDPI)
@@ -382,13 +391,26 @@ func (s *Service) runRender(ctx context.Context, pdf []byte, opts Options) (rend
 			}
 			out.dpi = pageDPI
 			out.markScanned(page)
-			if len(out.codes) > 0 {
-				break
-			}
 		}
 	}
 
 	return out, nil
+}
+
+// pageHasMatrix сообщает, найден ли на странице двумерный код.
+//
+// Нужна, чтобы не гонять дорогой поиск по областям там, где обычный
+// проход уже увидел QR или Data Matrix.
+func pageHasMatrix(codes []Code, page int) bool {
+	for _, c := range codes {
+		if c.Page != page {
+			continue
+		}
+		if c.Kind == string(scan.KindQR) || c.Kind == string(scan.KindMatrix) {
+			return true
+		}
+	}
+	return false
 }
 
 // dpiLadder возвращает список DPI для попыток: стартовый и, если разрешено
