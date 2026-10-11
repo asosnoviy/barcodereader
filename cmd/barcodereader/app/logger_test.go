@@ -113,13 +113,62 @@ func TestParseLevel(t *testing.T) {
 		"INFO":  slog.LevelInfo,
 		"warn":  slog.LevelWarn,
 		"error": slog.LevelError,
-		"":      slog.LevelInfo,
-		"мусор": slog.LevelInfo,
+		// Пустое и неопознанное значение не должно молча включать шумные
+		// уровни: умолчание — warn.
+		"":      slog.LevelWarn,
+		"мусор": slog.LevelWarn,
 	}
 	for name, want := range cases {
 		if got := parseLevel(name); got != want {
 			t.Errorf("parseLevel(%q) = %v, ожидалось %v", name, got, want)
 		}
+	}
+}
+
+// При пустом значении уровня (то есть при умолчании) в журнал попадают
+// только события жизненного цикла и ошибки. Это ровно тот состав, ради
+// которого журнал службы вообще открывают.
+func TestDefaultLevelKeepsOnlyLifecycleAndErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "service.log")
+
+	logger, closer, err := NewLogger("", path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	defer closer.Close()
+
+	logger.Debug("вывод модуля PDFium")
+	logger.Info("документ обработан", "codes", 1)
+	logger.Warn("сервис запущен", "addr", ":8080")
+	logger.Error("запрос не обработан", "code", "pdf_unreadable")
+
+	data := readFileEventually(t, path)
+	for _, unwanted := range []string{"вывод модуля PDFium", "документ обработан"} {
+		if strings.Contains(data, unwanted) {
+			t.Errorf("запись %q не должна попадать в журнал уровня warn:\n%s", unwanted, data)
+		}
+	}
+	for _, wanted := range []string{"сервис запущен", "запрос не обработан"} {
+		if !strings.Contains(data, wanted) {
+			t.Errorf("в журнале нет записи %q:\n%s", wanted, data)
+		}
+	}
+}
+
+// Уровень info остаётся рабочим: полная картина по запросу нужна при
+// разборе инцидентов.
+func TestInfoLevelLogsEveryScan(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "service.log")
+
+	logger, closer, err := NewLogger("info", path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	defer closer.Close()
+	logger.Info("документ обработан", "codes", 1)
+
+	if data := readFileEventually(t, path); !strings.Contains(data, "документ обработан") {
+		t.Errorf("на уровне info нет записи о сканировании:\n%s", data)
 	}
 }
 

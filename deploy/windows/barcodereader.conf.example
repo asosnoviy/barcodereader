@@ -41,6 +41,9 @@ QUEUE_WAIT = 2s
 # Журнал. Пустое значение означает stdout: в консольном режиме это удобно,
 # а под службой журнал подставляется автоматически в
 # %PROGRAMDATA%\Barcodereader\logs\barcodereader.log
-LOG_LEVEL = info
+#
+# Уровень warn — умолчание: в журнале остаются только старт, остановка и
+# ошибки. Уровень info добавляет запись о каждом сканировании.
+LOG_LEVEL = warn
 LOG_FILE = C:\ProgramData\Barcodereader\logs\barcodereader.log
 LOG_PAYLOADS = false

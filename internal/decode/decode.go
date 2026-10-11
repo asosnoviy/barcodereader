@@ -120,7 +120,11 @@ func (s *Service) Decode(ctx context.Context, pdf []byte, opts Options) (*Result
 	if s.cfg.EnableEmbeddedStage && s.embedded != nil {
 		found, err := s.runEmbedded(ctx, pdf, opts)
 		if err != nil {
-			s.logger.Warn("стадия извлечения встроенных изображений не сработала", "err", err)
+			// Неудача стадии A повторяется на каждом документе, который
+			// pdfcpu не осилил, поэтому в журнал по умолчанию (warn) она не
+			// годится. Настоящий вердикт — «документ непригоден» — пишется
+			// на уровне error, когда вторая стадия тоже не справилась.
+			s.logger.Debug("стадия извлечения встроенных изображений не сработала", "err", err)
 			embeddedErr = err
 		} else if len(found) > 0 {
 			for i := range found {

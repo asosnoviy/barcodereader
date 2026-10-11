@@ -121,6 +121,9 @@ func (h *Handler) handleDecode(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, toResponse(requestID, result))
 
+	// Запись о каждом сканировании остаётся на уровне info: при умолчании
+	// warn она всё равно не попадает в журнал, но уровень info должен
+	// показывать, что сервис жив и работает, а не молчать как при warn.
 	h.logger.Info("документ обработан",
 		"request_id", requestID,
 		"codes", result.Meta.CodesUnique,
@@ -177,7 +180,9 @@ func (h *Handler) logFailure(requestID string, err error, started time.Time, siz
 		"elapsed_ms", time.Since(started).Milliseconds(),
 	}
 	if apiErr.Code == "no_codes_found" {
-		// Отсутствие кода — нормальный исход, а не сбой.
+		// Отсутствие кода — нормальный исход, а не сбой: на уровне warn
+		// такая запись не нужна, но на info она показывает, что запрос
+		// дошёл до конца.
 		h.logger.Info("коды не найдены", attrs...)
 		return
 	}

@@ -37,8 +37,10 @@ func TestLoadFromDefaults(t *testing.T) {
 	if cfg.PdfiumWorkers < 1 || cfg.MaxConcurrent < 1 {
 		t.Errorf("Workers/MaxConcurrent должны быть >= 1, получено %d/%d", cfg.PdfiumWorkers, cfg.MaxConcurrent)
 	}
-	if cfg.LogLevel != "info" {
-		t.Errorf("LogLevel = %q, ожидалось \"info\"", cfg.LogLevel)
+	// Умолчание warn, а не info: иначе каждое сканирование попадает в журнал
+	// службы и тот быстро становится бесполезным.
+	if cfg.LogLevel != "warn" {
+		t.Errorf("LogLevel = %q, ожидалось \"warn\"", cfg.LogLevel)
 	}
 	if cfg.LogPayloads {
 		t.Error("LogPayloads по умолчанию должен быть выключен")

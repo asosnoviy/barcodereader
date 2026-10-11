@@ -231,7 +231,7 @@ C:\ProgramData\Barcodereader\barcodereader.conf
 ADDR = :8080
 RENDER_DPI = 300
 MAX_PAGES = 20
-LOG_LEVEL = info
+LOG_LEVEL = warn
 ```
 
 Путь к файлу можно задать явно переменной `CONFIG_FILE`. **Переменные окружения
@@ -252,6 +252,19 @@ C:\ProgramData\Barcodereader\logs\barcodereader.log
 `stdout`, если `LOG_FILE` не задан явно.
 
 Ротации нет: файл растёт, пока его не переименуют или не удалят вручную.
+
+По умолчанию `LOG_LEVEL = warn`, и в журнале остаются только события
+жизненного цикла и настоящие ошибки:
+
+| Уровень | что попадает в журнал |
+|---|---|
+| `warn` (по умолчанию) | старт и остановка службы, команды остановки, ошибки запросов и сбои |
+| `info` | плюс каждое сканирование: сколько кодов, какие стадии, сколько страниц |
+| `debug` | плюс неудачи отдельных стадий, вывод модуля PDFium, параметры запуска |
+
+Старт и остановка намеренно помечены как `warn`: при умолчании `warn` именно
+эти записи должны пережить фильтр — по журналу и узнают, когда служба
+поднялась и когда упала.
 
 ### Поведение при остановке
 
@@ -286,7 +299,7 @@ C:\ProgramData\Barcodereader\logs\barcodereader.log
 | `PDFIUM_WORKERS` | `min(4, CPU)` | размер пула PDFium |
 | `MAX_CONCURRENT` | `PDFIUM_WORKERS` | сколько документов декодировать одновременно |
 | `QUEUE_WAIT` | `2s` | сколько ждать слот; иначе 429 |
-| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `LOG_LEVEL` | `warn` | `debug` \| `info` \| `warn` \| `error` |
 | `LOG_FILE` | — | журнал в файл вместо stdout; пусто — stdout |
 | `LOG_PAYLOADS` | `false` | логировать ли сами документы и значения кодов (PII!) |
 | `CONFIG_FILE` | `%PROGRAMDATA%\Barcodereader\barcodereader.conf` | путь к файлу конфигурации |

@@ -111,7 +111,11 @@ func Run(ctx context.Context, cfg config.Config, logger *Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("сервис запущен",
+		// Старт, остановка и их команды SCM пишутся на уровне warn.
+		// Журнал по умолчанию открывают именно затем, чтобы увидеть, когда
+		// служба поднялась и когда упала; на уровне info эти записи не
+		// проходили бы, потому что умолчание теперь warn.
+		logger.Warn("сервис запущен",
 			"addr", cfg.Addr,
 			"pid", os.Getpid(),
 			"version", buildinfo.String(),
@@ -133,7 +137,7 @@ func Run(ctx context.Context, cfg config.Config, logger *Logger) error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		logger.Info("получена команда остановки")
+		logger.Warn("получена команда остановки")
 	}
 
 	// Новые запросы отклоняются сразу, текущие успевают завершиться.
@@ -144,7 +148,7 @@ func Run(ctx context.Context, cfg config.Config, logger *Logger) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
-	logger.Info("сервис остановлен")
+	logger.Warn("сервис остановлен")
 	return nil
 }
 

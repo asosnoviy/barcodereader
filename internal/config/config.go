@@ -67,7 +67,7 @@ func Default() Config {
 		PdfiumWorkers:       workers,
 		MaxConcurrent:       workers,
 		QueueWait:           2 * time.Second,
-		LogLevel:            "info",
+		LogLevel:            "warn",
 		LogPayloads:         false,
 	}
 }

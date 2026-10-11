@@ -24,4 +24,7 @@ func newServiceContext() (context.Context, context.CancelFunc) {
 	return context.WithCancel(context.Background())
 }
 
-var _ = slog.LevelInfo
+// Старт и остановка на не-Windows системах логируются на уровне warn,
+// как и под службой: при умолчании warn это единственные записи о
+// жизненном цикле, которые остаются в журнале.
+var _ = slog.LevelWarn

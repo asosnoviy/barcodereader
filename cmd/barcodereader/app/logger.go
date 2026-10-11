@@ -165,16 +165,25 @@ func openLogFile(path string) (*os.File, error) {
 	return file, nil
 }
 
+// parseLevel переводит имя уровня в slog.Level.
+//
+// По умолчанию здесь warn, а не info. Уровень по умолчанию должен
+// оставлять в журнале события жизненного цикла и настоящие ошибки, но не
+// каждое сканирование: под службой журнал иначе растёт на десятки записей
+// в минуту и перестаёт что-то значить. Подробности каждого запроса доступны
+// на уровне info или debug, который включается через LOG_LEVEL.
 func parseLevel(name string) slog.Level {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "debug":
 		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
 	case "warn":
 		return slog.LevelWarn
 	case "error":
 		return slog.LevelError
 	default:
-		return slog.LevelInfo
+		return slog.LevelWarn
 	}
 }
 

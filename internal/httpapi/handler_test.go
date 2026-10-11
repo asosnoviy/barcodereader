@@ -75,6 +75,50 @@ func postJSON(t *testing.T, h *Handler, payload any) *http.Response {
 	return rec.Result()
 }
 
+// Журнал службы по умолчанию открывают на уровне warn, и в нём должны
+// оставаться только старт, остановка и ошибки. Запись о каждом успешном
+// сканировании при таком уровне недопустима: на info она тоже полезна,
+// поэтому проверяем обе границы.
+func TestSuccessfulDecodeLogging(t *testing.T) {
+	newHandler := func(level slog.Level) (*Handler, *bytes.Buffer) {
+		var buf bytes.Buffer
+		decoder := &stubDecoder{result: &decode.Result{
+			Found: true,
+			Value: "https://example.com/42",
+			Codes: []decode.Code{{
+				Value: "https://example.com/42", Kind: "qr", Format: "QR_CODE",
+				Page: 1, Source: decode.SourceEmbeddedImage,
+			}},
+			Meta: decode.Meta{PagesTotal: 1, PagesScanned: 1, StagesUsed: []string{"embedded_image"}, CodesUnique: 1},
+		}}
+		handler := NewHandler(config.Default(), decoder,
+			slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: level})))
+		return handler, &buf
+	}
+
+	t.Run("warn по умолчанию молчит", func(t *testing.T) {
+		h, buf := newHandler(slog.LevelWarn)
+		res := postJSON(t, h, decodeRequest{PDFBase64: base64.StdEncoding.EncodeToString(validPDF())})
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, ожидалось 200", res.StatusCode)
+		}
+		if buf.Len() != 0 {
+			t.Errorf("успешное сканирование попало в журнал уровня warn: %s", buf.String())
+		}
+	})
+
+	t.Run("info пишет каждое сканирование", func(t *testing.T) {
+		h, buf := newHandler(slog.LevelInfo)
+		res := postJSON(t, h, decodeRequest{PDFBase64: base64.StdEncoding.EncodeToString(validPDF())})
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, ожидалось 200", res.StatusCode)
+		}
+		if !strings.Contains(buf.String(), "документ обработан") {
+			t.Errorf("на уровне info нет записи о сканировании: %s", buf.String())
+		}
+	})
+}
+
 func TestDecodeSuccess(t *testing.T) {
 	decoder := &stubDecoder{result: &decode.Result{
 		Found: true,

@@ -60,7 +60,7 @@ func RunService(cfg config.Config, logger *Logger) error {
 		if rerr := logger.RedirectTo(logPath); rerr != nil {
 			logger.Warn("журнал в файл недоступен, остаюсь на прежнем", "err", rerr)
 		} else {
-			logger.Info("служба запущена под диспетчером служб",
+			logger.Warn("служба запущена под диспетчером служб",
 				"name", ServiceName, "log_file", logPath)
 		}
 	}
@@ -147,7 +147,9 @@ func (h *serviceHandler) Execute(
 	changes chan<- svc.Status,
 ) (svcSpecificEC bool, exitCode uint32) {
 	logger := h.getLogger()
-	logger.Info("служба запущена", "name", ServiceName, "args", args)
+	// Старт и остановка службы — на уровне warn: при умолчании warn именно
+	// они и ошибки остаются в журнале. Подробности работы видны на info.
+	logger.Warn("служба запущена", "name", ServiceName, "args", args)
 
 	// StartPending: SCM ждёт, пока служба поднимется.
 	changes <- status(svc.StartPending, 60*time.Second)
@@ -187,7 +189,7 @@ func (h *serviceHandler) Execute(
 				// Ответ на запрос состояния: ничего не меняем.
 				changes <- ctl.CurrentStatus
 			case svc.Stop, svc.Shutdown:
-				logger.Info("получена команда остановки от SCM", "cmd", ctl.Cmd)
+				logger.Warn("получена команда остановки от SCM", "cmd", ctl.Cmd)
 
 				// StopPending до отмены контекста: текущие запросы должны
 				// успеть завершиться, иначе SCM убьёт процесс по таймауту.
@@ -198,10 +200,10 @@ func (h *serviceHandler) Execute(
 					logger.Error("сервис остановился с ошибкой", "err", err)
 				}
 				changes <- status(svc.Stopped, 0)
-				logger.Info("служба остановлена")
+				logger.Warn("служба остановлена")
 				return false, 0
 			default:
-				logger.Info("проигнорирована команда SCM", "cmd", ctl.Cmd)
+				logger.Debug("проигнорирована команда SCM", "cmd", ctl.Cmd)
 			}
 		case err := <-errCh:
 			// Служба упала сама: отдаём SCM ненулевой код, чтобы он
