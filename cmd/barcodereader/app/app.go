@@ -113,6 +113,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	go func() {
 		logger.Info("сервис запущен",
 			"addr", cfg.Addr,
+			"pid", os.Getpid(),
 			"version", buildinfo.String(),
 			"binary", executablePath(),
 			"working_dir", workingDir(),
