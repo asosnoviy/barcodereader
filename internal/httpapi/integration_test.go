@@ -250,7 +250,7 @@ func TestDeduplicatesEqualValues(t *testing.T) {
 }
 
 func TestDecodeQRAndEAN13(t *testing.T) {
-	status, res := post(t, fixture(t, "barcode_ean13.pdf"), nil)
+	status, res := post(t, fixture(t, "barcode_ean13.pdf"), map[string]any{"include_barcodes": true})
 
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, тело: %+v", status, res.Error)
@@ -269,7 +269,7 @@ func TestDecodeQRAndEAN13(t *testing.T) {
 }
 
 func TestDecodeBarcodeOnly(t *testing.T) {
-	status, res := post(t, fixture(t, "barcode_only.pdf"), nil)
+	status, res := post(t, fixture(t, "barcode_only.pdf"), map[string]any{"include_barcodes": true})
 
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, тело: %+v", status, res.Error)
@@ -282,14 +282,23 @@ func TestDecodeBarcodeOnly(t *testing.T) {
 	}
 }
 
-func TestIncludeBarcodesDisabled(t *testing.T) {
-	status, res := post(t, fixture(t, "barcode_only.pdf"), map[string]any{"include_barcodes": false})
+// Поиск линейных кодов выключен по умолчанию: документ только со штрихкодом
+// без явного include_barcodes должен быть признан пустым.
+func TestBarcodesOffByDefault(t *testing.T) {
+	for name, options := range map[string]map[string]any{
+		"без опций":          nil,
+		"явно выключены":     {"include_barcodes": false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			status, res := post(t, fixture(t, "barcode_only.pdf"), options)
 
-	if status != http.StatusNotFound {
-		t.Fatalf("status = %d, ожидался 404 (штрихкоды отключены)", status)
-	}
-	if res.Error.Code != "no_codes_found" {
-		t.Errorf("code = %q", res.Error.Code)
+			if status != http.StatusNotFound {
+				t.Fatalf("status = %d, ожидался 404 (штрихкоды выключены)", status)
+			}
+			if res.Error.Code != "no_codes_found" {
+				t.Errorf("code = %q", res.Error.Code)
+			}
+		})
 	}
 }
 

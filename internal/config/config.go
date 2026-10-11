@@ -27,8 +27,13 @@ type Config struct {
 	RegionSearch        bool
 	RegionMargin        int
 	EnableEmbeddedStage bool
-	IncludeBarcodes     bool
-	ReturnAllQR         bool
+	// IncludeBarcodes включает поиск линейных штрихкодов. По умолчанию
+	// выключено: поиск линейных кодов — самая дорогая часть разбора
+	// (замер: 84% времени вызова на документе с одним QR), а в потоке
+	// таких документов почти нет. Включается настройкой или флагом
+	// include_barcodes в запросе.
+	IncludeBarcodes bool
+	ReturnAllQR     bool
 	PdfiumWorkers       int
 	MaxConcurrent       int
 	QueueWait           time.Duration
@@ -62,7 +67,7 @@ func Default() Config {
 		RegionSearch:        true,
 		RegionMargin:        8,
 		EnableEmbeddedStage: true,
-		IncludeBarcodes:     true,
+		IncludeBarcodes:     false,
 		ReturnAllQR:         true,
 		PdfiumWorkers:       workers,
 		MaxConcurrent:       workers,

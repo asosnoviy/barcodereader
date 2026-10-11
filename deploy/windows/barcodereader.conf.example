@@ -22,8 +22,10 @@ RENDER_DPI = 200
 RENDER_DPI_MAX = 400
 RETRY_HIGHER_DPI = true
 
-# Что искать.
-INCLUDE_BARCODES = true
+# Что искать. Линейные штрихкоды выключены по умолчанию: поиск 1D — самая
+# дорогая часть разбора (около 84% времени вызова на документе с одним QR).
+# Включается здесь или флагом include_barcodes в запросе.
+INCLUDE_BARCODES = false
 RETURN_ALL_QR = true
 ENABLE_EMBEDDED_STAGE = true
 

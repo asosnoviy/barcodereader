@@ -31,7 +31,7 @@ func TestLoadFromDefaults(t *testing.T) {
 	if cfg.RenderDPI != 200 || cfg.RenderDPIMax != 400 {
 		t.Errorf("DPI = %d/%d, ожидалось 200/400", cfg.RenderDPI, cfg.RenderDPIMax)
 	}
-	if !cfg.EnableEmbeddedStage || !cfg.IncludeBarcodes || !cfg.ReturnAllQR {
+	if !cfg.EnableEmbeddedStage || cfg.IncludeBarcodes || !cfg.ReturnAllQR {
 		t.Error("стадии и декодирование должны быть включены по умолчанию")
 	}
 	if cfg.PdfiumWorkers < 1 || cfg.MaxConcurrent < 1 {
@@ -60,7 +60,7 @@ func TestLoadFromOverrides(t *testing.T) {
 		"MAX_IMAGE_DIM":        "1200",
 		"ONED_MAX_WIDTH":       "800",
 		"ENABLE_EMBEDDED_STAGE": "false",
-		"INCLUDE_BARCODES":     "0",
+		"INCLUDE_BARCODES":     "1",
 		"RETURN_ALL_QR":        "no",
 		"MAX_RENDER_PIXELS":    "1000000",
 		"PDFIUM_WORKERS":       "2",
@@ -88,7 +88,7 @@ func TestLoadFromOverrides(t *testing.T) {
 	if cfg.RenderDPI != 150 || cfg.RenderDPIMax != 600 || cfg.RetryHigherDPI {
 		t.Errorf("DPI-настройки не применены: %+v", cfg)
 	}
-	if cfg.EnableEmbeddedStage || cfg.IncludeBarcodes || cfg.ReturnAllQR {
+	if cfg.EnableEmbeddedStage || !cfg.IncludeBarcodes || cfg.ReturnAllQR {
 		t.Errorf("булевы настройки не применены: %+v", cfg)
 	}
 	if cfg.MaxRenderPixels != 1_000_000 || cfg.PdfiumWorkers != 2 || cfg.MaxConcurrent != 5 {
