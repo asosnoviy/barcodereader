@@ -47,8 +47,7 @@ type Options struct {
 // qrAttempt описывает одну попытку поиска QR-кода.
 type qrAttempt struct {
 	name string
-	// bitmap строит бинарное представление изображения.
-	bitmap func(image.Image) (*gozxing.BinaryBitmap, error)
+	kind attemptKind
 	// hints дополняет базовые подсказки декодера.
 	hints map[gozxing.DecodeHintType]any
 }
@@ -72,32 +71,36 @@ func invertedHints() map[gozxing.DecodeHintType]any {
 	}
 }
 
-// hybridBitmap — стандартный путь: адаптивная бинаризация по яркости.
-func hybridBitmap(img image.Image) (*gozxing.BinaryBitmap, error) {
-	return gozxing.NewBinaryBitmapFromImage(img)
-}
+// attemptKind — способ построения бинарного представления попытки.
+type attemptKind int
 
-// globalBitmap — глобальная гистограмма; выручает на изображениях с сильной
-// засветкой, где локальная адаптация даёт пустую картинку.
-func globalBitmap(img image.Image) (*gozxing.BinaryBitmap, error) {
-	source := gozxing.NewLuminanceSourceFromImage(img)
-	return gozxing.NewBinaryBitmap(gozxing.NewGlobalHistgramBinarizer(source))
-}
+const (
+	attemptHybrid attemptKind = iota
+	attemptGlobal
+	attemptInverted
+)
 
-// invertedBitmap — светлый код на тёмном фоне: инвертируем яркость явно,
-// без reliance на ALSO_INVERTED.
-func invertedBitmap(img image.Image) (*gozxing.BinaryBitmap, error) {
-	source := gozxing.NewInvertedLuminanceSource(gozxing.NewLuminanceSourceFromImage(img))
-	return gozxing.NewBinaryBitmap(gozxing.NewHybridBinarizer(source))
+// bitmap строит представление поверх разделяемого источника яркости:
+// яркость считается один раз, а бинаризатор у каждой попытки свой —
+// иначе кеш матрицы смешал бы результаты разных попыток.
+func (a qrAttempt) bitmap(lum *luminance) (*gozxing.BinaryBitmap, error) {
+	switch a.kind {
+	case attemptGlobal:
+		return lum.global()
+	case attemptInverted:
+		return lum.inverted()
+	default:
+		return lum.hybrid()
+	}
 }
 
 // qrAttempts — лестница попыток: от дешёвой и стандартной к более дорогим.
 func qrAttempts() []qrAttempt {
 	return []qrAttempt{
-		{name: "hybrid", bitmap: hybridBitmap, hints: baseQRHints},
-		{name: "hybrid+harder", bitmap: hybridBitmap, hints: tryHarderHints()},
-		{name: "global", bitmap: globalBitmap, hints: baseQRHints},
-		{name: "inverted", bitmap: invertedBitmap, hints: invertedHints()},
+		{name: "hybrid", kind: attemptHybrid, hints: baseQRHints},
+		{name: "hybrid+harder", kind: attemptHybrid, hints: tryHarderHints()},
+		{name: "global", kind: attemptGlobal, hints: baseQRHints},
+		{name: "inverted", kind: attemptInverted, hints: invertedHints()},
 	}
 }
 
@@ -140,11 +143,13 @@ func scanDataMatrix(ctx context.Context, img image.Image, opts Options) []Code {
 		},
 	}
 
+	lum := newLuminance(scaled)
+
 	for _, hints := range attempts {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		bitmap, err := hybridBitmap(scaled)
+		bitmap, err := lum.hybrid()
 		if err != nil {
 			return nil
 		}
@@ -159,12 +164,13 @@ func scanDataMatrix(ctx context.Context, img image.Image, opts Options) []Code {
 // scanQR перебирает попытки, пока не найдёт QR-код(ы).
 func scanQR(ctx context.Context, img image.Image, opts Options) []Code {
 	scaled := Downscale(img, opts.MaxImageDim)
+	lum := newLuminance(scaled)
 
 	for _, attempt := range qrAttempts() {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		bitmap, err := attempt.bitmap(scaled)
+		bitmap, err := attempt.bitmap(lum)
 		if err != nil {
 			continue
 		}
@@ -194,6 +200,13 @@ func scanOneD(ctx context.Context, img image.Image, opts Options) []Code {
 		return nil
 	}
 
+	// Яркость и бинаризация считаются один раз на все три попытки: картинка
+	// одна и та же, а ZXing пересчитывает и то и другое при каждом вызове.
+	bitmap, err := newLuminance(small).hybrid()
+	if err != nil {
+		return nil
+	}
+
 	for _, hintSet := range []map[gozxing.DecodeHintType]any{
 		nil,
 		{gozxing.DecodeHintType_TRY_HARDER: true},
@@ -204,7 +217,7 @@ func scanOneD(ctx context.Context, img image.Image, opts Options) []Code {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		if codes := tryOneDReaders(small, hintSet); len(codes) > 0 {
+		if codes := tryOneDReaders(bitmap, hintSet); len(codes) > 0 {
 			// Попытка могла вернуть мусор: вертикальную линию рамки ZXing
 			// принимает за штрихкод. Отфильтрованное пусто означает, что
 			// надо продолжать лестницу, а не останавливаться.
@@ -224,7 +237,11 @@ func scanOneD(ctx context.Context, img image.Image, opts Options) []Code {
 	if inverted == nil {
 		return nil
 	}
-	return filterOneD(tryOneDReaders(inverted, map[gozxing.DecodeHintType]any{
+	invertedBitmap, err := newLuminance(inverted).hybrid()
+	if err != nil {
+		return nil
+	}
+	return filterOneD(tryOneDReaders(invertedBitmap, map[gozxing.DecodeHintType]any{
 		gozxing.DecodeHintType_TRY_HARDER: true,
 	}))
 }

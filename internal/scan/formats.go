@@ -1,8 +1,6 @@
 package scan
 
 import (
-	"image"
-
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/oned"
 	"github.com/makiuchi-d/gozxing/oned/rss"
@@ -29,14 +27,10 @@ func oneDFactories() []oneDFactory {
 	}
 }
 
-// tryOneDReaders прогоняет изображение через ридеры форматов по очереди и
-// возвращает все найденные коды (в пределах одной попытки — по одному на формат).
-func tryOneDReaders(img image.Image, hints map[gozxing.DecodeHintType]any) []Code {
-	bitmap, err := gozxing.NewBinaryBitmapFromImage(img)
-	if err != nil {
-		return nil
-	}
-
+// tryOneDReaders прогоняет готовое бинарное представление через ридеры
+// форматов по очереди и возвращает все найденные коды (в пределах одной
+// попытки — по одному на формат).
+func tryOneDReaders(bitmap *gozxing.BinaryBitmap, hints map[gozxing.DecodeHintType]any) []Code {
 	var codes []Code
 	for _, factory := range oneDFactories() {
 		reader := factory.new()
