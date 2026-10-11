@@ -212,9 +212,18 @@ func TestStageASoftFailureFallsBackToRender(t *testing.T) {
 	}
 }
 
+// Зашифрованный документ: pdfcpu сообщает об этом, рендер PDFium тоже не
+// справится, и клиент получает pdf_encrypted.
+//
+// Рендер при этом запускается: его вердикт не обязан совпадать с вердиктом
+// pdfcpu. На реальных файлах находились документы, которые pdfcpu отвергал,
+// а PDFium разбирал без замечаний — прежняя досрочная отдача ошибки
+// закрывала к ним дорогу. Поскольку обе стадии здесь отказывают, наружу
+// выходит ошибка стадии A: она точнее описывает проблему формата.
 func TestStageAHardFailureIsReturned(t *testing.T) {
 	embedded := &stubEmbedded{err: apierrors.PDFEncrypted(errors.New("encrypted"))}
-	renderer := &stubRenderer{doc: &stubDocument{pages: 1}}
+	// Рендер тоже не смог открыть документ.
+	renderer := &stubRenderer{doc: &stubDocument{pages: 1}, err: errors.New("password required")}
 	svc := New(testConfig(), renderer, embedded, quietLogger())
 
 	_, err := svc.Decode(t.Context(), []byte("%PDF-1.7"), defaultOptions())
@@ -225,8 +234,8 @@ func TestStageAHardFailureIsReturned(t *testing.T) {
 	if apiErr.Code != "pdf_encrypted" {
 		t.Errorf("code = %q, ожидалось pdf_encrypted", apiErr.Code)
 	}
-	if renderer.opened != 0 {
-		t.Error("при нечитаемом документе рендер запускаться не должен")
+	if renderer.opened != 1 {
+		t.Errorf("рендер открывал документ %d раз, ожидалась одна попытка", renderer.opened)
 	}
 }
 

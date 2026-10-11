@@ -109,16 +109,19 @@ func (s *Service) Decode(ctx context.Context, pdf []byte, opts Options) (*Result
 	)
 
 	// Стадия A: быстрый путь через встроенные изображения.
+	//
+	// Ошибка pdfcpu не считается приговором документу. Она означает лишь,
+	// что встроенные картинки извлечь не удалось: pdfcpu чувствителен к
+	// окружению (каталогам, шрифтам, памяти) и может отвергнуть файл,
+	// который PDFium разбирает без единого замечания. Решение о «документ
+	// непригоден» принимается только после того, как вторая стадия тоже
+	// не справилась.
+	var embeddedErr error
 	if s.cfg.EnableEmbeddedStage && s.embedded != nil {
 		found, err := s.runEmbedded(ctx, pdf, opts)
 		if err != nil {
-			var apiErr *apierrors.Error
-			if errors.As(err, &apiErr) {
-				// Документ непригоден целиком — рендер не поможет.
-				return nil, err
-			}
-			// Мягкая ошибка стадии: логируем и идём дальше.
 			s.logger.Warn("стадия извлечения встроенных изображений не сработала", "err", err)
+			embeddedErr = err
 		} else if len(found) > 0 {
 			for i := range found {
 				found[i].order = order
@@ -131,10 +134,24 @@ func (s *Service) Decode(ctx context.Context, pdf []byte, opts Options) (*Result
 
 	// Стадия B нужна, если стадия A ничего не нашла или нашла только QR,
 	// а штрихкоды запрошены: линейные коды часто нарисованы векторами.
+	// Если стадия A отвергла документ, рендер запускается обязательно.
 	pagesTotal, pagesScanned := 0, 0
-	if s.shouldRender(codes, opts) {
+	if s.shouldRender(codes, opts) || embeddedErr != nil {
 		rendered, err := s.runRender(ctx, pdf, opts)
 		if err != nil {
+			// Рендер тоже не справился: документ действительно непригоден.
+			s.logger.Error("обе стадии не смогли разобрать документ",
+				"embedded_err", embeddedErr, "render_err", err)
+
+			// Наружу отдаём конкретный вердикт о документе — тот, что стадия A
+			// дала как apierrors (зашифрован, повреждён). Мягкие ошибки
+			// вроде «pdfcpu не смог» клиенту неизвестны и, попав наверх,
+			// превратились бы в 500. Если такого вердикта нет, правдива
+			// ошибка рендера.
+			var apiErr *apierrors.Error
+			if embeddedErr != nil && errors.As(embeddedErr, &apiErr) && !isInfrastructuralError(err) {
+				return nil, embeddedErr
+			}
 			return nil, err
 		}
 		pagesTotal = rendered.pagesTotal
@@ -395,6 +412,23 @@ func (s *Service) runRender(ctx context.Context, pdf []byte, opts Options) (rend
 	}
 
 	return out, nil
+}
+
+// isInfrastructuralError отличает отказы окружения от отказа документа.
+//
+// Таймаут или нехватка ёмкости ничего не говорят о самом PDF: клиенту
+// нужно видеть эти причины, а не «документ повреждён».
+func isInfrastructuralError(err error) bool {
+	var apiErr *apierrors.Error
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.Code {
+	case "timeout", "no_capacity":
+		return true
+	default:
+		return false
+	}
 }
 
 // pageHasMatrix сообщает, найден ли на странице двумерный код.
