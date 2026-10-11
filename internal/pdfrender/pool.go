@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/klippa-app/go-pdfium"
@@ -15,6 +16,23 @@ import (
 	"github.com/klippa-app/go-pdfium/responses"
 	"github.com/klippa-app/go-pdfium/webassembly"
 )
+
+// guestOutput принимает вывод гостевого модуля PDFium (printf из wasm).
+//
+// Отдавать сюда os.Stdout или os.Stderr нельзя. Под службой Windows эти
+// дескрипторы не открыты: GetFileType на них возвращает ERROR_INVALID_HANDLE.
+// Wazero при создании инстанса модуля запрашивает Stat() у переданного файла
+// (нужно понять, терминал это или нет), и весь пул падает с
+// «GetFileType /dev/stdout: The handle is invalid» — не открывается ни один
+// документ. Поэтому здесь обычный io.Writer без системного дескриптора.
+type guestOutput struct{}
+
+func (guestOutput) Write(p []byte) (int, error) {
+	if msg := strings.TrimRight(string(p), "\r\n"); msg != "" {
+		slog.Debug("вывод модуля PDFium", "out", msg)
+	}
+	return len(p), nil
+}
 
 // Renderer владеет пулом инстансов PDFium. Создаётся один раз на старте
 // сервиса и закрывается при shutdown.
@@ -33,6 +51,8 @@ func NewRenderer(workers int) (*Renderer, error) {
 		MinIdle: workers,
 		MaxIdle: workers,
 		MaxTotal: workers * 2,
+		Stdout:  guestOutput{},
+		Stderr:  guestOutput{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("инициализация пула PDFium: %w", err)
