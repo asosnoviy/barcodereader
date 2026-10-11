@@ -13,15 +13,63 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"os/user"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"barcodereader/internal/buildinfo"
 	"barcodereader/internal/config"
 	"barcodereader/internal/decode"
 	"barcodereader/internal/httpapi"
 	"barcodereader/internal/pdfembedded"
 	"barcodereader/internal/pdfrender"
 )
+
+// executablePath — путь к запущенному бинарнику. Служба поднимает файл
+// из Program Files, разработчик собирает в bin/: без этого в журнале
+// нельзя отличить одно от другого.
+func executablePath() string {
+	if p, err := os.Executable(); err == nil {
+		return p
+	}
+	return "неизвестно"
+}
+
+// workingDir — рабочий каталог процесса. У службы он системный, и это
+// неожиданно для того, кто привык запускать из своего каталога.
+func workingDir() string {
+	if dir, err := os.Getwd(); err == nil {
+		return dir
+	}
+	return "неизвестно"
+}
+
+// currentUser — пользователь, от имени которого работает процесс.
+func currentUser() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	if name := os.Getenv("USERNAME"); name != "" {
+		return name
+	}
+	return "неизвестно"
+}
+
+// tempDirWritable проверяет, доступен ли временный каталог для записи.
+// Некоторые библиотеки туда пишут, и отказ оборачивается ошибкой,
+// не связанной с самим документом.
+func tempDirWritable() string {
+	dir := os.TempDir()
+	probe, err := os.CreateTemp(dir, "probe-*")
+	if err != nil {
+		return "нет (" + err.Error() + ")"
+	}
+	name := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(name)
+	return filepath.Clean(dir) + " доступен"
+}
 
 // ShutdownTimeout — сколько ждать завершения текущих запросов после
 // команды на остановку.
@@ -65,6 +113,11 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	go func() {
 		logger.Info("сервис запущен",
 			"addr", cfg.Addr,
+			"version", buildinfo.String(),
+			"binary", executablePath(),
+			"working_dir", workingDir(),
+			"user", currentUser(),
+			"temp_dir", tempDirWritable(),
 			"workers", cfg.PdfiumWorkers,
 			"embedded_stage", cfg.EnableEmbeddedStage,
 			"render_dpi", cfg.RenderDPI,

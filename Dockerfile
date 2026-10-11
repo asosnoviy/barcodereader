@@ -11,9 +11,17 @@ RUN go mod download
 COPY . .
 
 # CGO_ENABLED=0 даёт статический бинарник, который запускается в scratch.
+# Версия и хеш коммита идут в журнал: по работающему контейнеру видно,
+# какой именно код разбирает документы.
+ARG VERSION=dev
+ARG REVISION=unknown
+ARG BUILD_TIME=unknown
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
-    -ldflags="-s -w" \
+    -ldflags="-s -w \
+      -X 'barcodereader/internal/buildinfo.Version=${VERSION}' \
+      -X 'barcodereader/internal/buildinfo.Revision=${REVISION}' \
+      -X 'barcodereader/internal/buildinfo.BuildTime=${BUILD_TIME}'" \
     -o /out/barcodereader ./cmd/barcodereader
 
 FROM scratch
