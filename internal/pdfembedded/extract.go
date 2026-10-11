@@ -22,6 +22,19 @@ import (
 	"barcodereader/internal/apierrors"
 )
 
+// pdfcpu по умолчанию ищет свой конфиг в пользовательском каталоге и
+// создаёт его, если нет. В контейнере под non-root пользователем это
+// падает с «mkdir /.config: permission denied»: домашнего каталога нет,
+// а fault.Fail в pdfcpu поднимает панику.
+//
+// Сервису пользовательский конфиг pdfcpu не нужен: мы сами задаём все
+// параметры. Поэтому каталог отключается один раз при инициализации,
+// а собственные вызовы идут через stateless-конфигурацию, которая не
+// обращается к файловой системе вовсе.
+func init() {
+	api.DisableConfigDir()
+}
+
 // Image — картинка, извлечённая из PDF.
 type Image struct {
 	// Img — декодированное изображение.
@@ -56,11 +69,23 @@ func (Extractor) PageCount(ctx context.Context, pdf []byte) (int, error) {
 
 // PageCount возвращает число страниц документа.
 func PageCount(ctx context.Context, pdf []byte) (int, error) {
-	count, err := api.PageCount(ctx, bytes.NewReader(pdf), model.NewDefaultConfiguration())
+	count, err := api.PageCount(ctx, bytes.NewReader(pdf), newConfiguration())
 	if err != nil {
 		return 0, classify(err)
 	}
 	return count, nil
+}
+
+// newConfiguration собирает конфигурацию pdfcpu.
+//
+// Используется stateless-вариант: он не читает и не создаёт config.yml,
+// что обязательно в контейнере под non-root. Все нужные параметры
+// выставляются явно.
+func newConfiguration() *model.Configuration {
+	conf := model.NewStatelessConfiguration()
+	// JBIG2 и прочие неподдерживаемые потоки не должны ронять стадию целиком.
+	conf.UnsupportedResourcePolicy = model.UnsupportedResourceSkip
+	return conf
 }
 
 // Extract достаёт встроенные изображения документа.
@@ -104,9 +129,7 @@ func Extract(ctx context.Context, pdf []byte, selection []int, maxPages int) (im
 		return nil, nil
 	}
 
-	conf := model.NewDefaultConfiguration()
-	// JBIG2 и прочие неподдерживаемые потоки не должны ронять стадию целиком.
-	conf.UnsupportedResourcePolicy = model.UnsupportedResourceSkip
+	conf := newConfiguration()
 
 	pages, extractErr := api.ExtractImagesRaw(ctx, bytes.NewReader(pdf), pageNumbers, conf)
 
