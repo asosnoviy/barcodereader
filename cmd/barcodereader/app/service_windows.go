@@ -5,8 +5,6 @@ package app
 import (
 	"context"
 	"errors"
-	"log/slog"
-	"sync"
 	"syscall"
 	"time"
 
@@ -39,10 +37,13 @@ const failedServiceControllerConnect = syscall.Errno(1063)
 //
 // Отдельного ключа запуска не требуется: бинарник сам определяет режим по
 // тому, подключился ли он к диспетчеру служб.
-func RunService(cfg config.Config, logger *slog.Logger) error {
-	handler := newServiceHandler(cfg, logger)
-
-	connected, wait, err := probeDispatcher(handler)
+//
+// Перенаправление журнала в файл происходит ЗДЕСЬ и только здесь: момент,
+// когда stdout становится бесполезным, совпадает с подключением к SCM.
+// Сам журнал при этом не заменяется — меняется приёмник внутри него, иначе
+// обработчик, уже взявший ссылку, продолжил бы писать в stdout.
+func RunService(cfg config.Config, logger *Logger) error {
+	connected, wait, err := probeDispatcher(cfg, logger)
 	if err != nil {
 		// Не сорвалось — считаем себя консольным приложением и пишем
 		// предупреждение в тот же журнал.
@@ -55,18 +56,12 @@ func RunService(cfg config.Config, logger *slog.Logger) error {
 	}
 
 	// Под службой stdout не читает никто: переводим журнал в файл.
-	// Само переключение безопасно — запросы ещё не могли прийти.
 	if logPath := LogFilePath(cfg.LogFile, config.DefaultLogDirPath()); logPath != "" {
-		fileLogger, closer, lerr := NewLogger(cfg.LogLevel, logPath)
-		if lerr != nil {
-			logger.Warn("журнал в файл недоступен, остаюсь на прежнем", "err", lerr)
+		if rerr := logger.RedirectTo(logPath); rerr != nil {
+			logger.Warn("журнал в файл недоступен, остаюсь на прежнем", "err", rerr)
 		} else {
-			// Closer живёт до конца службы: закрывать файл раньше нельзя,
-			// а забыть закрыть — значит оставить дескриптор на годы.
-			defer closer.Close()
-			handler.setLogger(fileLogger)
-			logger = fileLogger
-			logger.Info("служба запущена под диспетчером служб", "name", ServiceName, "log_file", logPath)
+			logger.Info("служба запущена под диспетчером служб",
+				"name", ServiceName, "log_file", logPath)
 		}
 	}
 
@@ -82,10 +77,10 @@ func RunService(cfg config.Config, logger *slog.Logger) error {
 // Возвращает признак подключения и функцию ожидания: если подключение
 // состоялось, wait() блокируется до конца работы службы и возвращает её
 // ошибку.
-func probeDispatcher(handler *serviceHandler) (connected bool, wait func() error, err error) {
+func probeDispatcher(cfg config.Config, logger *Logger) (connected bool, wait func() error, err error) {
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- svc.Run(ServiceName, handler)
+		errCh <- svc.Run(ServiceName, newServiceHandler(cfg, logger))
 	}()
 
 	select {
@@ -114,29 +109,18 @@ type serviceHandler struct {
 	// start запускает сам сервис. Поле, а не прямой вызов Run, чтобы
 	// состояние службы можно было проверить в тестах без подъёма пула
 	// PDFium и компиляции wasm.
-	start func(context.Context, config.Config, *slog.Logger) error
+	start func(context.Context, config.Config, *Logger) error
 
-	// mu защищает logger: сам SCM вызывает Execute уже во время пробного
-	// подключения, то есть параллельно с переключением журнала на файл.
-	mu     sync.Mutex
-	logger *slog.Logger
+	// logger переключается на файл после подключения к SCM. Ссылка на
+	// сам журнал общая, поэтому перенаправление видно и здесь.
+	logger *Logger
 }
 
-func newServiceHandler(cfg config.Config, logger *slog.Logger) *serviceHandler {
+func newServiceHandler(cfg config.Config, logger *Logger) *serviceHandler {
 	return &serviceHandler{cfg: cfg, logger: logger, start: Run}
 }
 
-func (h *serviceHandler) setLogger(logger *slog.Logger) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.logger = logger
-}
-
-func (h *serviceHandler) getLogger() *slog.Logger {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.logger
-}
+func (h *serviceHandler) getLogger() *Logger { return h.logger }
 
 // accepted — команды SCM, на которые служба умеет отвечать.
 const accepted = svc.AcceptStop | svc.AcceptShutdown

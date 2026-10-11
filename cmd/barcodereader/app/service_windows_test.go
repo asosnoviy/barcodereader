@@ -1,12 +1,11 @@
-//go:build windows
+﻿//go:build windows
 
 package app
 
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -15,15 +14,20 @@ import (
 	"barcodereader/internal/config"
 )
 
-// quietLogger уводит журнал в io.Discard: тесты проверяют состояния SCM,
+// quietLogger уводит журнал в /dev/null: тесты проверяют состояния SCM,
 // а не текст сообщений.
-func quietLogger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(io.Discard, nil))
+func quietLogger() *Logger {
+	log := New("info")
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0o600)
+	if err == nil {
+		log.file = devNull
+	}
+	return log
 }
 
 // newTestHandler собирает обработчик службы с подменённым запуском, чтобы
 // не поднимать настоящий HTTP-сервер и пул PDFium.
-func newTestHandler(start func(context.Context, config.Config, *slog.Logger) error) *serviceHandler {
+func newTestHandler(start func(context.Context, config.Config, *Logger) error) *serviceHandler {
 	h := newServiceHandler(config.Default(), quietLogger())
 	h.start = start
 	return h
@@ -97,7 +101,7 @@ func hasState(list []svc.State, want svc.State) bool {
 // Stop, отдав SCM статус Stopped.
 func TestServiceHandlerStopCommand(t *testing.T) {
 	started := make(chan struct{})
-	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *slog.Logger) error {
+	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *Logger) error {
 		close(started)
 		<-ctx.Done()
 		return nil
@@ -125,7 +129,7 @@ func TestServiceHandlerStopCommand(t *testing.T) {
 // Порядок состояний важен для SCM: StopPending должен предшествовать
 // Stopped, иначе диспетчер решит, что служба зависла.
 func TestServiceHandlerReportsStopPendingBeforeStopped(t *testing.T) {
-	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *slog.Logger) error {
+	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *Logger) error {
 		<-ctx.Done()
 		return nil
 	})
@@ -155,7 +159,7 @@ func TestServiceHandlerReportsStopPendingBeforeStopped(t *testing.T) {
 // StopPending обязан объявить SCM время ожидания: без WaitHint диспетчер
 // считает службу зависшей и убивает процесс по своему таймауту.
 func TestServiceHandlerStopPendingHasWaitHint(t *testing.T) {
-	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *slog.Logger) error {
+	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *Logger) error {
 		<-ctx.Done()
 		return nil
 	})
@@ -181,7 +185,7 @@ func TestServiceHandlerStopPendingHasWaitHint(t *testing.T) {
 // Падение сервиса должно быть видно SCM ненулевым кодом: иначе
 // настроенная политика перезапуска не сработает.
 func TestServiceHandlerCrashReportsNonZeroExit(t *testing.T) {
-	h := newTestHandler(func(context.Context, config.Config, *slog.Logger) error {
+	h := newTestHandler(func(context.Context, config.Config, *Logger) error {
 		return errors.New("упало")
 	})
 
@@ -198,7 +202,7 @@ func TestServiceHandlerCrashReportsNonZeroExit(t *testing.T) {
 // Interrogate — запрос состояния: служба обязана ответить, не меняя
 // ничего. Случайные команды не должны ронять службу.
 func TestServiceHandlerIgnoresUnknownCommands(t *testing.T) {
-	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *slog.Logger) error {
+	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *Logger) error {
 		<-ctx.Done()
 		return nil
 	})
@@ -216,7 +220,7 @@ func TestServiceHandlerIgnoresUnknownCommands(t *testing.T) {
 
 // Закрытие канала команд SCM не должно оставлять службу висеть.
 func TestServiceHandlerExitsWhenCommandChannelCloses(t *testing.T) {
-	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *slog.Logger) error {
+	h := newTestHandler(func(ctx context.Context, _ config.Config, _ *Logger) error {
 		<-ctx.Done()
 		return nil
 	})
@@ -229,7 +233,7 @@ func TestServiceHandlerExitsWhenCommandChannelCloses(t *testing.T) {
 }
 
 func TestStatusCarriesPIDAndAccepts(t *testing.T) {
-	h := newTestHandler(func(context.Context, config.Config, *slog.Logger) error { return nil })
+	h := newTestHandler(func(context.Context, config.Config, *Logger) error { return nil })
 
 	statuses, _, _ := executeHandler(t, h)
 

@@ -81,11 +81,11 @@ const ShutdownTimeout = 15 * time.Second
 // контексту, а не по сигналу: служба Windows не присылает сигналы, ей
 // приходит команда Stop от SCM. Сигналы по-прежнему обрабатываются —
 // консольный запуск ведёт себя как раньше.
-func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+func Run(ctx context.Context, cfg config.Config, logger *Logger) error {
 	if logger == nil {
-		logger = slog.Default()
+		logger = New("info")
 	}
-	slog.SetDefault(logger)
+	slog.SetDefault(logger.Logger)
 
 	// Пул PDFium инициализируется один раз: Wazero компилирует wasm-модуль
 	// при старте, поэтому лишние инстансы замедляют подъём сервиса.
@@ -95,8 +95,8 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	defer renderer.Close()
 
-	decoder := decode.New(cfg, pdfiumRenderer{renderer}, pdfembedded.Extractor{}, logger)
-	handler := httpapi.NewHandler(cfg, decoder, logger)
+	decoder := decode.New(cfg, pdfiumRenderer{renderer}, pdfembedded.Extractor{}, logger.Logger)
+	handler := httpapi.NewHandler(cfg, decoder, logger.Logger)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
@@ -150,7 +150,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 // RunWithSignals запускает сервис, перехватывая сигналы остановки.
 // Это консольный сценарий: Ctrl+C и SIGTERM должны завершать работу.
-func RunWithSignals(cfg config.Config, logger *slog.Logger) error {
+func RunWithSignals(cfg config.Config, logger *Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return Run(ctx, cfg, logger)
